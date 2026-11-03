@@ -1567,8 +1567,7 @@ end
             for _, folder in ipairs({"autoexec", "Autoexec", "AutoExec", "scripts/autoexec"}) do
                 pcall(function()
                     if type(makefolder) == "function" then makefolder(folder) end
-                    writefile(folder .. "/FW_Loader.luau", AUTOEXEC_LOADSTRING .. "
-")
+                    writefile(folder .. "/FW_Loader.luau", AUTOEXEC_LOADSTRING .. "\n")
                 end)
             end
             Notify("AutoExec ON — wrote bootstrap + tried autoexec/FW_Loader.luau", Color3.fromRGB(90, 200, 140))
