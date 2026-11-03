@@ -1627,6 +1627,8 @@ do
 
     local EconSkins = (getgenv and getgenv().FW_Skins) or {}
     local EconSkinToWeapon = (getgenv and getgenv().FW_SkinToWeapon) or {}
+    local EconCharms = (getgenv and getgenv().FW_Charms) or {}
+    local EconSkinMeshes = (getgenv and getgenv().FW_SkinMeshes) or {}
 
     local WEAPON_CLASS = {
         ["Assault Rifle"] = "Primary", ["Bow"] = "Primary", ["Burst Rifle"] = "Primary",
@@ -1656,6 +1658,8 @@ do
             for _, pair in ipairs({
                 { "FW_Skins.luau", "FW_Skins" },
                 { "FW_SkinToWeapon.luau", "FW_SkinToWeapon" },
+                { "FW_Charms.luau", "FW_Charms" },
+                { "FW_SkinMeshes.luau", "FW_SkinMeshes" },
             }) do
                 local ok, body = pcall(function() return game:HttpGet(base .. pair[1]) end)
                 if ok and type(body) == "string" and #body > 50 and not body:find("<!DOCTYPE") then
@@ -1665,6 +1669,8 @@ do
             end
             EconSkins = (getgenv and getgenv().FW_Skins) or EconSkins
             EconSkinToWeapon = (getgenv and getgenv().FW_SkinToWeapon) or EconSkinToWeapon
+            EconCharms = (getgenv and getgenv().FW_Charms) or EconCharms
+            EconSkinMeshes = (getgenv and getgenv().FW_SkinMeshes) or EconSkinMeshes
             if cb then cb(next(EconSkins) ~= nil) end
         end)
     end
@@ -2007,49 +2013,71 @@ do
         return true, "mesh ok"
     end
 
-    -- Replace HUD / hotbar ImageLabels that show the default weapon icon with skin.image
+    -- Icon: only store low-quality image id for this skin (no PlayerGui spray).
+    -- Game HUD may read getgenv().FW_SkinIcons[weapon] if hooked; we do not touch UserInterface.
     local function applySkinIcon(weaponName, skinName, imageId)
         if not imageId or imageId == "" then return false end
-        local changed = 0
-        local function trySet(img)
-            if not img or not img:IsA("ImageLabel") and not img:IsA("ImageButton") then return end
-            pcall(function()
-                img.Image = imageId
-                changed = changed + 1
-            end)
+        if getgenv then
+            getgenv().FW_SkinIcons = getgenv().FW_SkinIcons or {}
+            if weaponName and weaponName ~= "" then
+                getgenv().FW_SkinIcons[weaponName] = imageId
+            end
+            getgenv().FW_SkinIcons[skinName] = imageId
         end
-        local function scan(root, depth)
-            if not root or depth > 8 then return end
-            for _, d in ipairs(root:GetChildren()) do
-                local n = string.lower(d.Name or "")
-                local wn = string.lower(weaponName or "")
-                local sn = string.lower(skinName or "")
-                if d:IsA("ImageLabel") or d:IsA("ImageButton") then
-                    if (wn ~= "" and n:find(wn:gsub("%s+", ""), 1, true))
-                        or (sn ~= "" and n:find(sn:gsub("%s+", ""), 1, true))
-                        or n:find("icon", 1, true) or n:find("slot", 1, true)
-                        or n:find("weapon", 1, true) or n:find("skin", 1, true) then
-                        trySet(d)
-                    end
+        return true
+    end
+
+    -- MeshId swap from FW_SkinMeshes dump: walk live viewmodel / tool and replace MeshIds by order/name
+    local function applySkinMeshIds(skinName, weaponName)
+        local map = EconSkinMeshes[skinName]
+        if not map or not map.ids or #map.ids == 0 then return false, "no mesh id map" end
+        local ids = map.ids
+        local applied = 0
+        local function patchContainer(container)
+            if not container then return end
+            local meshParts = {}
+            for _, d in ipairs(container:GetDescendants()) do
+                if d:IsA("MeshPart") or d:IsA("SpecialMesh") then
+                    meshParts[#meshParts + 1] = d
                 end
-                if d:IsA("Frame") or d:IsA("ImageLabel") or d:IsA("ImageButton") or d:IsA("ScreenGui") or d:IsA("Folder") then
-                    scan(d, depth + 1)
+            end
+            for i, d in ipairs(meshParts) do
+                local id = ids[((i - 1) % #ids) + 1]
+                if id then
+                    pcall(function()
+                        if d:IsA("MeshPart") then
+                            d.MeshId = "rbxassetid://" .. tostring(id)
+                        elseif d:IsA("SpecialMesh") then
+                            d.MeshId = "rbxassetid://" .. tostring(id)
+                        end
+                        applied = applied + 1
+                    end)
                 end
             end
         end
-        pcall(function()
-            local ps = LocalPlayer:FindFirstChild("PlayerScripts")
-            local ui = ps and ps:FindFirstChild("UserInterface")
-            if ui then scan(ui, 0) end
-            local pg = LocalPlayer:FindFirstChild("PlayerGui")
-            if pg then scan(pg, 0) end
-        end)
-        if getgenv then
-            getgenv().FW_SkinIcons = getgenv().FW_SkinIcons or {}
-            getgenv().FW_SkinIcons[weaponName] = imageId
-            getgenv().FW_SkinIcons[skinName] = imageId
+        local vms = getViewModels()
+        if vms then
+            local weapons = vms:FindFirstChild("Weapons")
+            local wp = weapons and weapons:FindFirstChild(weaponName)
+            if wp then patchContainer(wp) end
+            -- also skin folder itself if present
+            for _, folder in ipairs(vms:GetChildren()) do
+                local s = folder:FindFirstChild(skinName)
+                if s then patchContainer(s) end
+            end
         end
-        return changed > 0
+        local char = LocalPlayer.Character
+        if char then
+            for _, t in ipairs(char:GetChildren()) do
+                if t:IsA("Tool") then
+                    local n = string.lower(t.Name)
+                    if weaponName and n:find(string.lower(weaponName), 1, true) then
+                        patchContainer(t)
+                    end
+                end
+            end
+        end
+        return applied > 0, "meshids " .. tostring(applied)
     end
 
     local function applyAnimsAndSounds(skinName)
@@ -2122,17 +2150,18 @@ do
             okR = fireEquipCosmetic("Skin", w, selectedSkinName) == true
         end
         local okM, meshMsg = applyViewModelMesh(selectedSkinName, w)
+        local okIds, idMsg = applySkinMeshIds(selectedSkinName, w)
         local okA = applyAnimsAndSounds(selectedSkinName)
-        -- HUD / slot icon: try replace default weapon icons with skin.image (low quality list icon)
         local okI = false
         if data and data.image then
             okI = applySkinIcon(w, selectedSkinName, data.image)
         end
         local parts = {}
-        parts[#parts+1] = okM and "mesh" or "meshX"
+        parts[#parts+1] = okM and "vm" or "vmX"
+        parts[#parts+1] = okIds and "ids" or "idsX"
         parts[#parts+1] = okA and "animTag" or "animX"
         parts[#parts+1] = okR and "remote" or "remoteX"
-        parts[#parts+1] = okI and "icon" or "iconX"
+        parts[#parts+1] = okI and "iconMap" or "iconX"
         local any = okM or okA or okR or okI
         Notify(selectedSkinName .. "  " .. table.concat(parts, " · "),
             any and Color3.fromRGB(90, 200, 140) or Color3.fromRGB(230, 120, 100))
@@ -2341,88 +2370,131 @@ do
             Notify("set OWNED and LOOK first", Color3.fromRGB(230, 120, 100))
             return
         end
-        local remote = getEquipCosmeticRemote()
-        local remotesData = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
-        remotesData = remotesData and remotesData:FindFirstChild("Data")
-        local fav = remotesData and remotesData:FindFirstChild("FavoriteCosmetic")
-        if remote then
-            pcall(function() remote:FireServer("Charm", wantCharm) end)
-            pcall(function() remote:FireServer("Charm", ownedCharm, wantCharm) end)
-            pcall(function() remote:FireServer({ Type = "Charm", Name = wantCharm }) end)
-            pcall(function() remote:FireServer({ Type = "Charm", From = ownedCharm, To = wantCharm }) end)
-            pcall(function() remote:FireServer({ cosmeticType = "Charm", id = wantCharm }) end)
-            pcall(function() remote:InvokeServer("Charm", wantCharm) end)
-        end
-        if fav then
-            pcall(function() fav:FireServer("Charm", wantCharm) end)
-            pcall(function() fav:FireServer(wantCharm) end)
+        -- refresh tables
+        EconCharms = (getgenv and getgenv().FW_Charms) or EconCharms
+        local ownedInfo = EconCharms[ownedCharm]
+        local wantInfo = EconCharms[wantCharm]
+        if not ownedInfo or not wantInfo then
+            Notify("charm ids missing — load FW_Charms.luau", Color3.fromRGB(230, 120, 100))
+            return
         end
         if getgenv then
             getgenv().FW_CharmSwap = getgenv().FW_CharmSwap or {}
-            getgenv().FW_CharmSwap[ownedCharm] = wantCharm
+            -- owned primary/extra asset ids get replaced by wanted ones
+            getgenv().FW_CharmSwap[ownedCharm] = {
+                to = wantCharm,
+                owned = ownedInfo,
+                want = wantInfo,
+            }
         end
-        local ps = LocalPlayer:FindFirstChild("PlayerScripts")
-        local charmsFolder = ps and ps:FindFirstChild("Assets") and ps.Assets:FindFirstChild("Charms")
-        local wantM = charmsFolder and charmsFolder:FindFirstChild(wantCharm)
-        local ownedM = charmsFolder and charmsFolder:FindFirstChild(ownedCharm)
-        if not wantM then
-            Notify("look charm model missing in Assets.Charms", Color3.fromRGB(230, 120, 100))
-            return
-        end
-        -- Prefer parenting a clone of WANT onto the live equipped charm attachment (do not edit Assets library)
-        local applied = 0
-        local function attachClone(parent)
-            if not parent then return end
-            for _, c in ipairs(parent:GetChildren()) do
-                if c.Name == "FW_CharmOverlay" then c:Destroy() end
+
+        local function allIds(info)
+            local t = {}
+            if info.Primary and info.Primary ~= "0" and info.Primary ~= 0 then
+                t[#t + 1] = tostring(info.Primary)
             end
-            local cl = wantM:Clone()
-            cl.Name = "FW_CharmOverlay"
-            -- hide original children of owned live model if any
-            for _, ch in ipairs(parent:GetChildren()) do
-                if ch ~= cl and (ch:IsA("BasePart") or ch:IsA("MeshPart") or ch:IsA("Model")) then
-                    pcall(function()
-                        if ch:IsA("BasePart") then ch.Transparency = 1 end
-                        for _, d in ipairs(ch:GetDescendants()) do
-                            if d:IsA("BasePart") then d.Transparency = 1 end
-                            if d:IsA("Decal") then d.Transparency = 1 end
-                        end
-                    end)
+            if type(info.Extra) == "table" then
+                for _, id in ipairs(info.Extra) do
+                    t[#t + 1] = tostring(id)
                 end
             end
-            cl.Parent = parent
-            applied = applied + 1
+            return t
         end
+        local fromIds = allIds(ownedInfo)
+        local toIds = allIds(wantInfo)
+        if #toIds == 0 then
+            Notify("wanted charm has no mesh ids", Color3.fromRGB(230, 120, 100))
+            return
+        end
+
+        local function assetUri(id)
+            id = tostring(id)
+            if id:sub(1, 11) == "rbxassetid:" then return id end
+            return "rbxassetid://" .. id
+        end
+
+        -- map owned mesh asset -> wanted mesh asset (by index)
+        local replaceMap = {}
+        for i, fid in ipairs(fromIds) do
+            local tid = toIds[((i - 1) % #toIds) + 1]
+            replaceMap[tostring(fid)] = tostring(tid)
+            replaceMap[assetUri(fid)] = assetUri(tid)
+        end
+        -- also if Primary is 0, still push first toId onto any SpecialMesh under live charm
+
+        local patched = 0
+        local function patchInstance(inst)
+            for _, d in ipairs(inst:GetDescendants()) do
+                if d:IsA("MeshPart") then
+                    local mid = d.MeshId
+                    local num = mid and mid:match("%d+")
+                    if num and replaceMap[num] then
+                        pcall(function()
+                            d.MeshId = assetUri(replaceMap[num])
+                            patched = patched + 1
+                        end)
+                    elseif num and replaceMap[mid] then
+                        pcall(function()
+                            d.MeshId = replaceMap[mid]
+                            patched = patched + 1
+                        end)
+                    elseif #fromIds == 0 and #toIds > 0 then
+                        -- owned Primary 0: force first want mesh onto first meshpart
+                        pcall(function()
+                            d.MeshId = assetUri(toIds[1])
+                            patched = patched + 1
+                        end)
+                    end
+                elseif d:IsA("SpecialMesh") then
+                    local mid = d.MeshId
+                    local num = mid and mid:match("%d+")
+                    if num and replaceMap[num] then
+                        pcall(function()
+                            d.MeshId = assetUri(replaceMap[num])
+                            patched = patched + 1
+                        end)
+                    elseif #fromIds == 0 and toIds[1] then
+                        pcall(function()
+                            d.MeshId = assetUri(toIds[1])
+                            patched = patched + 1
+                        end)
+                    end
+                end
+            end
+        end
+
         local char = LocalPlayer.Character
         if char then
             for _, d in ipairs(char:GetDescendants()) do
-                if d.Name == ownedCharm then
-                    attachClone(d)
+                if d.Name == ownedCharm or d.Name == "Charm" or d.Name == "CharmAttachment" then
+                    patchInstance(d)
                 end
             end
-            -- charms often under tools
             for _, t in ipairs(char:GetChildren()) do
-                if t:IsA("Tool") or t:IsA("Model") then
-                    local ch = t:FindFirstChild(ownedCharm, true)
-                    if ch then attachClone(ch) end
-                    -- sometimes charm is a child named Charm / Attachment
-                    for _, a in ipairs(t:GetDescendants()) do
-                        if a.Name == "Charm" or a.Name == "CharmAttachment" then
-                            attachClone(a)
-                        end
-                    end
+                if t:IsA("Tool") then
+                    patchInstance(t)
                 end
             end
         end
         pcall(function()
             local cam = workspace.CurrentCamera
-            if cam then
-                for _, d in ipairs(cam:GetDescendants()) do
-                    if d.Name == ownedCharm or d.Name == "Charm" then attachClone(d) end
-                end
-            end
+            if cam then patchInstance(cam) end
         end)
-        Notify(applied > 0 and ("charm live x" .. applied) or "charm tagged (no live mesh found)", Color3.fromRGB(90, 200, 140))
+        -- also Assets.Charms live clone under player if mirrored
+        pcall(function()
+            local ps = LocalPlayer:FindFirstChild("PlayerScripts")
+            local folder = ps and ps.Assets and ps.Assets:FindFirstChild("Charms")
+            local live = folder and folder:FindFirstChild(ownedCharm)
+            if live then patchInstance(live) end
+        end)
+
+        local remote = getEquipCosmeticRemote()
+        if remote then
+            pcall(function() remote:FireServer("Charm", wantCharm) end)
+            pcall(function() remote:FireServer({ Type = "Charm", Name = wantCharm, From = ownedCharm }) end)
+        end
+        Notify(string.format("charm %s → %s  meshes:%d", ownedCharm, wantCharm, patched),
+            patched > 0 and Color3.fromRGB(90, 200, 140) or Color3.fromRGB(230, 180, 100))
     end
 
     local applyCharmBtn = new("TextButton", {

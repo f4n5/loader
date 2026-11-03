@@ -31,8 +31,9 @@ end
 
 -- preload skin/wrap tables (optional, silent fail)
 pcall(loadMod, "FW_Skins.luau", "FW_Skins")
-pcall(loadMod, "FW_Wraps.luau", "FW_Wraps")
 pcall(loadMod, "FW_SkinToWeapon.luau", "FW_SkinToWeapon")
+pcall(loadMod, "FW_Charms.luau", "FW_Charms")
+pcall(loadMod, "FW_SkinMeshes.luau", "FW_SkinMeshes")
 
 local main = httpget(BASE .. "Loader.luau")
 if not main then
