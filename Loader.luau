@@ -1615,62 +1615,51 @@ end)
 
 
 
--- VISUALS — skin + wrap changer (Econ data: FW_Skins / FW_Wraps / FW_SkinToWeapon)
+
+-- VISUALS — skin by Primary/Secondary/Melee/Utility + charm swap
 do
     local vis = pages["Visuals"]
-    if not vis then
-        -- no page
-    else
-    -- load Econ tables (HttpGet raw or local require-style via loadstring of sibling files is host-dependent;
-    -- embed loaders that try getgenv cache first, then empty tables)
-    local function tryLoadModule(names)
-        for _, name in ipairs(names) do
-            if getgenv and getgenv()[name] then return getgenv()[name] end
-        end
-        return nil
-    end
+    if vis then
 
-    -- Data modules: FW_Skins.luau / FW_Wraps.luau / FW_SkinToWeapon.luau (host on f4n5/loader).
-    -- Loader can HttpGet them; here we also accept getgenv().FW_Skins etc. preloaded.
     local EconSkins = (getgenv and getgenv().FW_Skins) or {}
-    local EconWraps = (getgenv and getgenv().FW_Wraps) or {}
-    local EconSkinToWeapon = (getgenv and getgenv().FW_SkinToWeapon) or SkinToWeapon or {}
+    local EconSkinToWeapon = (getgenv and getgenv().FW_SkinToWeapon) or {}
 
-    local function ensureEconLoaded(cb)
-        if next(EconSkins) and next(EconWraps) then
-            if cb then cb(true) end
-            return
-        end
-        -- try game HttpGet from common raw paths user may host
+    local WEAPON_CLASS = {
+        ["Assault Rifle"] = "Primary", ["Bow"] = "Primary", ["Burst Rifle"] = "Primary",
+        ["Crossbow"] = "Primary", ["Distortion"] = "Primary", ["Energy Rifle"] = "Primary",
+        ["Flamethrower"] = "Primary", ["Grenade Launcher"] = "Primary", ["Minigun"] = "Primary",
+        ["Paintball Gun"] = "Primary", ["Permafrost"] = "Primary", ["RPG"] = "Primary",
+        ["Shotgun"] = "Primary", ["Sniper"] = "Primary", ["Warpstone"] = "Primary",
+        ["Daggers"] = "Secondary", ["Energy Pistols"] = "Secondary", ["Exogun"] = "Secondary",
+        ["Flare Gun"] = "Secondary", ["Freeze Ray"] = "Secondary", ["Gunblade"] = "Secondary",
+        ["Handgun"] = "Secondary", ["Revolver"] = "Secondary", ["Shorty"] = "Secondary",
+        ["Slingshot"] = "Secondary", ["Spray"] = "Secondary", ["Uzi"] = "Secondary",
+        ["Warper"] = "Secondary", ["Wildcat"] = "Secondary",
+        ["Battle Axe"] = "Melee", ["Chainsaw"] = "Melee", ["Fists"] = "Melee",
+        ["Katana"] = "Melee", ["Knife"] = "Melee", ["Maul"] = "Melee",
+        ["Scythe"] = "Melee", ["Spear"] = "Melee", ["Trowel"] = "Melee",
+        ["Flashbang"] = "Utility", ["Grappler"] = "Utility", ["Grenade"] = "Utility",
+        ["Jump Pad"] = "Utility", ["Medkit"] = "Utility", ["Molotov"] = "Utility",
+        ["Riot Shield"] = "Utility", ["Satchel"] = "Utility", ["Smoke Grenade"] = "Utility",
+        ["Subspace Tripmine"] = "Utility", ["War Horn"] = "Utility",
+    }
+    local CLASS_ORDER = { "Primary", "Secondary", "Melee", "Utility" }
+
+    local function ensureSkinsLoaded(cb)
+        if next(EconSkins) then if cb then cb(true) end return end
         task.spawn(function()
-            local bases = {
-                "https://raw.githubusercontent.com/f4n5/loader/refs/heads/main/",
-            }
-            local files = {
+            local base = "https://raw.githubusercontent.com/f4n5/loader/refs/heads/main/"
+            for _, pair in ipairs({
                 { "FW_Skins.luau", "FW_Skins" },
-                { "FW_Wraps.luau", "FW_Wraps" },
                 { "FW_SkinToWeapon.luau", "FW_SkinToWeapon" },
-            }
-            for _, base in ipairs(bases) do
-                for _, pair in ipairs(files) do
-                    local fname, gname = pair[1], pair[2]
-                    if not (getgenv and getgenv()[gname]) then
-                        local ok, body = pcall(function()
-                            return game:HttpGet(base .. fname)
-                        end)
-                        if ok and type(body) == "string" and #body > 50 and not body:find("<!DOCTYPE") then
-                            local ok2, mod = pcall(function()
-                                return loadstring(body)()
-                            end)
-                            if ok2 and type(mod) == "table" then
-                                if getgenv then getgenv()[gname] = mod end
-                            end
-                        end
-                    end
+            }) do
+                local ok, body = pcall(function() return game:HttpGet(base .. pair[1]) end)
+                if ok and type(body) == "string" and #body > 50 and not body:find("<!DOCTYPE") then
+                    local ok2, mod = pcall(function() return loadstring(body)() end)
+                    if ok2 and type(mod) == "table" and getgenv then getgenv()[pair[2]] = mod end
                 end
             end
             EconSkins = (getgenv and getgenv().FW_Skins) or EconSkins
-            EconWraps = (getgenv and getgenv().FW_Wraps) or EconWraps
             EconSkinToWeapon = (getgenv and getgenv().FW_SkinToWeapon) or EconSkinToWeapon
             if cb then cb(next(EconSkins) ~= nil) end
         end)
@@ -1681,7 +1670,7 @@ do
         Parent = vis,
         Size = UDim2.new(1, 0, 0, 28),
         BackgroundTransparency = 1,
-        Text = "Toggle a changer to open its panel. Apply only when you press the button.",
+        Text = "Toggle a panel. Skins grouped by Primary / Secondary / Melee / Utility.",
         TextColor3 = Color3.fromRGB(140, 150, 170),
         Font = Enum.Font.Gotham,
         TextSize = 11,
@@ -1690,7 +1679,7 @@ do
         LayoutOrder = 1,
     })
 
-    -- ========== SKIN PANEL ==========
+    -- ===== SKIN PANEL =====
     local skinPanel = new("Frame", {
         Parent = vis,
         Size = UDim2.new(1, 0, 0, 0),
@@ -1703,10 +1692,8 @@ do
     corner(skinPanel, 8)
     do
         local pad = Instance.new("UIPadding")
-        pad.PaddingTop = UDim.new(0, 6)
-        pad.PaddingBottom = UDim.new(0, 6)
-        pad.PaddingLeft = UDim.new(0, 6)
-        pad.PaddingRight = UDim.new(0, 6)
+        pad.PaddingTop = UDim.new(0, 6) pad.PaddingBottom = UDim.new(0, 6)
+        pad.PaddingLeft = UDim.new(0, 6) pad.PaddingRight = UDim.new(0, 6)
         pad.Parent = skinPanel
         local lay = Instance.new("UIListLayout")
         lay.SortOrder = Enum.SortOrder.LayoutOrder
@@ -1714,18 +1701,30 @@ do
         lay.Parent = skinPanel
     end
 
+    local classFilter = "Primary"
+    local classRow = new("Frame", {
+        Parent = skinPanel,
+        Size = UDim2.new(1, 0, 0, 28),
+        BackgroundTransparency = 1,
+        LayoutOrder = 1,
+    })
+    local classLay = Instance.new("UIListLayout")
+    classLay.FillDirection = Enum.FillDirection.Horizontal
+    classLay.Padding = UDim.new(0, 4)
+    classLay.Parent = classRow
+
     local skinSearch = new("TextBox", {
         Parent = skinPanel,
         Size = UDim2.new(1, 0, 0, 26),
         BackgroundColor3 = Color3.fromRGB(22, 22, 30),
         BorderSizePixel = 0,
-        PlaceholderText = "search skin...",
+        PlaceholderText = "search skin or weapon...",
         Text = "",
         TextColor3 = Color3.fromRGB(210, 220, 240),
         Font = Enum.Font.Gotham,
         TextSize = 12,
         ClearTextOnFocus = false,
-        LayoutOrder = 1,
+        LayoutOrder = 2,
     })
     corner(skinSearch, 6)
 
@@ -1738,16 +1737,16 @@ do
         Font = Enum.Font.Code,
         TextSize = 11,
         TextXAlignment = Enum.TextXAlignment.Left,
-        LayoutOrder = 2,
+        LayoutOrder = 3,
     })
 
     local skinListHolder = new("Frame", {
         Parent = skinPanel,
-        Size = UDim2.new(1, 0, 0, 180),
+        Size = UDim2.new(1, 0, 0, 200),
         BackgroundColor3 = Color3.fromRGB(12, 12, 16),
         BorderSizePixel = 0,
         ClipsDescendants = true,
-        LayoutOrder = 3,
+        LayoutOrder = 4,
     })
     corner(skinListHolder, 6)
     local skinScroll = Instance.new("ScrollingFrame")
@@ -1761,7 +1760,7 @@ do
     skinScroll.Parent = skinListHolder
     local skinLayout = Instance.new("UIListLayout")
     skinLayout.Parent = skinScroll
-    skinLayout.SortOrder = Enum.SortOrder.Name
+    skinLayout.SortOrder = Enum.SortOrder.LayoutOrder
     skinLayout.Padding = UDim.new(0, 2)
 
     local selectedSkinName = CFG.SkinId or ""
@@ -1769,99 +1768,157 @@ do
 
     local function clearSkinRows()
         for _, c in ipairs(skinScroll:GetChildren()) do
-            if c:IsA("TextButton") then c:Destroy() end
+            if c:IsA("TextButton") or c:IsA("TextLabel") then c:Destroy() end
         end
     end
 
-    local function fillSkinList(filter)
+    local function addSkinHeader(text, order)
+        local lab = Instance.new("TextLabel")
+        lab.Size = UDim2.new(1, -6, 0, 20)
+        lab.BackgroundTransparency = 1
+        lab.Text = "  " .. text
+        lab.TextColor3 = Color3.fromRGB(100, 140, 200)
+        lab.Font = Enum.Font.GothamBold
+        lab.TextSize = 11
+        lab.TextXAlignment = Enum.TextXAlignment.Left
+        lab.LayoutOrder = order
+        lab.Parent = skinScroll
+    end
+
+    local function addSkinRow(text, order, onClick, isDefault)
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(1, -6, 0, 22)
+        btn.BackgroundColor3 = isDefault and Color3.fromRGB(30, 40, 36) or Color3.fromRGB(26, 26, 34)
+        btn.BorderSizePixel = 0
+        btn.Text = "  " .. text
+        btn.TextColor3 = isDefault and Color3.fromRGB(140, 220, 160) or Color3.fromRGB(210, 215, 230)
+        btn.Font = Enum.Font.Code
+        btn.TextSize = 11
+        btn.TextXAlignment = Enum.TextXAlignment.Left
+        btn.LayoutOrder = order
+        btn.Parent = skinScroll
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
+        if onClick then btn.MouseButton1Click:Connect(onClick) end
+        return btn
+    end
+
+    local function skinsForWeapon(weaponName)
+        local list = {}
+        for skin, wpn in pairs(EconSkinToWeapon) do
+            if wpn == weaponName then list[#list + 1] = skin end
+        end
+        -- also any EconSkins whose mapped weapon matches
+        if #list == 0 then
+            for skin, _ in pairs(EconSkins) do
+                if EconSkinToWeapon[skin] == weaponName then list[#list + 1] = skin end
+            end
+        end
+        table.sort(list)
+        return list
+    end
+
+    local function weaponsInClass(className)
+        local list = {}
+        for wpn, cls in pairs(WEAPON_CLASS) do
+            if cls == className then list[#list + 1] = wpn end
+        end
+        table.sort(list)
+        return list
+    end
+
+    local function fillSkinList()
         clearSkinRows()
-        filter = string.lower(filter or "")
-        -- Default row
-        local def = Instance.new("TextButton")
-        def.Size = UDim2.new(1, -6, 0, 22)
-        def.BackgroundColor3 = Color3.fromRGB(30, 40, 36)
-        def.BorderSizePixel = 0
-        def.Text = "  [DEFAULT] restore base"
-        def.TextColor3 = Color3.fromRGB(140, 220, 160)
-        def.Font = Enum.Font.Code
-        def.TextSize = 11
-        def.TextXAlignment = Enum.TextXAlignment.Left
-        def.Name = "0_default"
-        def.Parent = skinScroll
-        Instance.new("UICorner", def).CornerRadius = UDim.new(0, 4)
-        def.MouseButton1Click:Connect(function()
+        local filter = string.lower(skinSearch.Text or "")
+        local order = 0
+        order = order + 1
+        addSkinRow("[DEFAULT] restore base", order, function()
             selectedSkinName = ""
             CFG.SkinId = ""
             skinWeaponLbl.Text = "weapon: (default)"
-            Notify("default skin selected — re-equip weapon in game", Color3.fromRGB(90, 200, 140))
-        end)
+            Notify("default — re-equip weapon in game", Color3.fromRGB(90, 200, 140))
+        end, true)
 
-        local names = {}
-        for name, _ in pairs(EconSkins) do
-            if filter == "" or string.find(string.lower(name), filter, 1, true) then
-                names[#names + 1] = name
-            end
-        end
-        -- if Econ not loaded, fall back to ViewModels scan
-        if #names == 0 then
-            pcall(function()
-                local ps = LocalPlayer:FindFirstChild("PlayerScripts")
-                local assets = ps and ps:FindFirstChild("Assets")
-                local vms = assets and assets:FindFirstChild("ViewModels")
-                if not vms then return end
-                for _, folder in ipairs(vms:GetChildren()) do
-                    if folder.Name ~= "Weapons" and folder.Name ~= "Unobtainable" then
-                        for _, skin in ipairs(folder:GetChildren()) do
-                            local n = skin.Name
-                            if filter == "" or string.find(string.lower(n), filter, 1, true) then
-                                names[#names + 1] = n
+        local weapons = weaponsInClass(classFilter)
+        for _, wpn in ipairs(weapons) do
+            local skins = skinsForWeapon(wpn)
+            -- ViewModels fallback names under cases that map to this weapon
+            if #skins == 0 then
+                pcall(function()
+                    local ps = LocalPlayer:FindFirstChild("PlayerScripts")
+                    local vms = ps and ps:FindFirstChild("Assets") and ps.Assets:FindFirstChild("ViewModels")
+                    if not vms then return end
+                    for _, folder in ipairs(vms:GetChildren()) do
+                        if folder.Name ~= "Weapons" then
+                            for _, sk in ipairs(folder:GetChildren()) do
+                                local mapped = EconSkinToWeapon[sk.Name]
+                                if mapped == wpn or string.find(string.lower(sk.Name), string.lower(wpn), 1, true) then
+                                    skins[#skins + 1] = sk.Name
+                                end
                             end
                         end
                     end
+                end)
+                table.sort(skins)
+            end
+            local showWeapon = filter == "" or string.find(string.lower(wpn), filter, 1, true)
+            local matchedSkins = {}
+            for _, s in ipairs(skins) do
+                if filter == "" or string.find(string.lower(s), filter, 1, true) or showWeapon then
+                    if filter == "" or string.find(string.lower(s), filter, 1, true) or string.find(string.lower(wpn), filter, 1, true) then
+                        matchedSkins[#matchedSkins + 1] = s
+                    end
                 end
-            end)
-        end
-        table.sort(names)
-        for _, name in ipairs(names) do
-            local btn = Instance.new("TextButton")
-            btn.Size = UDim2.new(1, -6, 0, 22)
-            btn.BackgroundColor3 = Color3.fromRGB(26, 26, 34)
-            btn.BorderSizePixel = 0
-            local wpn = EconSkinToWeapon[name]
-            btn.Text = "  " .. name .. (wpn and ("  ·  " .. wpn) or "")
-            btn.TextColor3 = Color3.fromRGB(210, 215, 230)
-            btn.Font = Enum.Font.Code
-            btn.TextSize = 11
-            btn.TextXAlignment = Enum.TextXAlignment.Left
-            btn.Name = name
-            btn.Parent = skinScroll
-            Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
-            local captured = name
-            btn.MouseButton1Click:Connect(function()
-                selectedSkinName = captured
-                CFG.SkinId = captured
-                local w = EconSkinToWeapon[captured]
-                if w then
-                    selectedSkinWeapon = w
-                    CFG.SkinWeapon = w
-                    skinWeaponLbl.Text = "weapon: " .. w
-                else
-                    skinWeaponLbl.Text = "weapon: (unknown — set manually)"
+            end
+            if filter ~= "" and not showWeapon and #matchedSkins == 0 then
+                -- skip
+            else
+                order = order + 1
+                addSkinHeader(wpn .. "  (" .. tostring(#matchedSkins > 0 and #matchedSkins or #skins) .. ")", order)
+                local useList = #matchedSkins > 0 and matchedSkins or (filter == "" and skins or matchedSkins)
+                for _, skinName in ipairs(useList) do
+                    order = order + 1
+                    local captured = skinName
+                    local capturedW = wpn
+                    addSkinRow(skinName, order, function()
+                        selectedSkinName = captured
+                        selectedSkinWeapon = capturedW
+                        CFG.SkinId = captured
+                        CFG.SkinWeapon = capturedW
+                        skinWeaponLbl.Text = "weapon: " .. capturedW .. "  ·  skin: " .. captured
+                        Notify(captured .. " → " .. capturedW, Color3.fromRGB(90, 200, 140))
+                    end)
                 end
-                -- show icon if present
-                local data = EconSkins[captured]
-                if data and data.image then
-                    Notify(captured .. "  " .. tostring(data.image), Color3.fromRGB(90, 200, 140))
-                else
-                    Notify("selected " .. captured, Color3.fromRGB(90, 200, 140))
-                end
-            end)
+            end
         end
     end
 
-    skinSearch:GetPropertyChangedSignal("Text"):Connect(function()
-        fillSkinList(skinSearch.Text)
-    end)
+    skinSearch:GetPropertyChangedSignal("Text"):Connect(fillSkinList)
+
+    local function setClass(cls)
+        classFilter = cls
+        for _, c in ipairs(classRow:GetChildren()) do
+            if c:IsA("TextButton") then
+                c.BackgroundColor3 = (c.Name == cls) and Color3.fromRGB(40, 60, 100) or Color3.fromRGB(28, 28, 36)
+            end
+        end
+        fillSkinList()
+    end
+
+    for _, cls in ipairs(CLASS_ORDER) do
+        local b = Instance.new("TextButton")
+        b.Name = cls
+        b.Size = UDim2.new(0, 78, 1, 0)
+        b.BackgroundColor3 = (cls == "Primary") and Color3.fromRGB(40, 60, 100) or Color3.fromRGB(28, 28, 36)
+        b.BorderSizePixel = 0
+        b.Text = cls
+        b.TextColor3 = Color3.fromRGB(210, 215, 230)
+        b.Font = Enum.Font.Gotham
+        b.TextSize = 11
+        b.Parent = classRow
+        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+        local captured = cls
+        b.MouseButton1Click:Connect(function() setClass(captured) end)
+    end
 
     local function getViewModels()
         local ps = LocalPlayer:FindFirstChild("PlayerScripts")
@@ -1876,24 +1933,21 @@ do
         return data and data:FindFirstChild("EquipCosmetic")
     end
 
-    local function fireEquipCosmetic(weaponId, skinId)
+    local function fireEquipCosmetic(kind, a, b)
         local remote = getEquipCosmeticRemote()
         if not remote then return false end
         local attempts = {
-            function() remote:FireServer(weaponId, skinId) end,
-            function() remote:FireServer("Skin", weaponId, skinId) end,
-            function() remote:FireServer({ weapon = weaponId, skin = skinId }) end,
-            function() remote:FireServer({ Weapon = weaponId, Skin = skinId }) end,
-            function() remote:FireServer({ cosmeticType = "Skin", weapon = weaponId, id = skinId }) end,
-            function() remote:FireServer({ Type = "Skin", Name = skinId, Weapon = weaponId }) end,
-            function() remote:FireServer(skinId) end,
-            function() remote:InvokeServer(weaponId, skinId) end,
-            function() remote:InvokeServer({ weapon = weaponId, skin = skinId }) end,
+            function() remote:FireServer(a, b) end,
+            function() remote:FireServer(kind, a, b) end,
+            function() remote:FireServer({ Type = kind, Name = b, Weapon = a }) end,
+            function() remote:FireServer({ cosmeticType = kind, weapon = a, id = b }) end,
+            function() remote:FireServer({ Weapon = a, Skin = b }) end,
+            function() remote:FireServer(b) end,
+            function() remote:InvokeServer(kind, a, b) end,
+            function() remote:InvokeServer({ Type = kind, Name = b, Weapon = a }) end,
         }
         local okAny = false
-        for _, fn in ipairs(attempts) do
-            if pcall(fn) then okAny = true end
-        end
+        for _, fn in ipairs(attempts) do if pcall(fn) then okAny = true end end
         return okAny
     end
 
@@ -1917,31 +1971,17 @@ do
                 c:Clone().Parent = weaponPath
             end
         end)
-        return ok, ok and "mesh ok" or "clone failed"
+        return ok
     end
 
-    -- Anim + AnimSound swap using Econ anims maps into AnimationLibrary if present
     local function applyAnimsAndSounds(skinName)
         local data = EconSkins[skinName]
-        if not data then return false, "no econ data" end
-        local rs = game:GetService("ReplicatedStorage")
-        local mods = rs:FindFirstChild("Modules")
-        local animLib = mods and mods:FindFirstChild("AnimationLibrary")
-        if not animLib then return false, "no AnimationLibrary" end
-
-        -- patch SoundCallbacks keys if animsReverse maps skin-specific callback names
-        local sc = animLib:FindFirstChild("SoundCallbacks")
-        local applied = 0
-        if data.anims and sc then
-            -- store active override table on getgenv for any game hooks that read it
-            if getgenv then
-                getgenv().FW_ActiveSkinAnims = data.anims
-                getgenv().FW_ActiveSkinAnimsReverse = data.animsReverse
-                getgenv().FW_ActiveSkinName = skinName
-            end
-            applied = applied + 1
+        if not data then return false end
+        if getgenv then
+            getgenv().FW_ActiveSkinAnims = data.anims
+            getgenv().FW_ActiveSkinAnimsReverse = data.animsReverse
+            getgenv().FW_ActiveSkinName = skinName
         end
-        -- rootoffset on current viewmodel root if we can find it
         if data.rootoffset then
             pcall(function()
                 local vms = getViewModels()
@@ -1955,9 +1995,8 @@ do
                     root.CFrame = CFrame.new(r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12])
                 end
             end)
-            applied = applied + 1
         end
-        return applied > 0, "anims tags set"
+        return true
     end
 
     local applySkinBtn = new("TextButton", {
@@ -1974,22 +2013,19 @@ do
     corner(applySkinBtn, 6)
     applySkinBtn.MouseButton1Click:Connect(function()
         if selectedSkinName == "" then
-            Notify("pick a skin or DEFAULT", Color3.fromRGB(230, 120, 100))
+            Notify("pick a skin", Color3.fromRGB(230, 120, 100))
             return
         end
         local w = selectedSkinWeapon ~= "" and selectedSkinWeapon or (EconSkinToWeapon[selectedSkinName] or "")
-        local okR = false
-        if w ~= "" then
-            okR = fireEquipCosmetic(w, selectedSkinName)
-        end
-        local okM, msgM = applyViewModelMesh(selectedSkinName, w)
-        local okA, msgA = applyAnimsAndSounds(selectedSkinName)
-        Notify(string.format("%s | mesh:%s | anim:%s | remote:%s", selectedSkinName, tostring(okM), tostring(okA), tostring(okR)),
+        local okR = w ~= "" and fireEquipCosmetic("Skin", w, selectedSkinName)
+        local okM = applyViewModelMesh(selectedSkinName, w)
+        local okA = applyAnimsAndSounds(selectedSkinName)
+        Notify(string.format("%s | mesh:%s anim:%s remote:%s", selectedSkinName, tostring(okM), tostring(okA), tostring(okR)),
             (okM or okA or okR) and Color3.fromRGB(90, 200, 140) or Color3.fromRGB(230, 120, 100))
     end)
 
-    -- ========== WRAP PANEL ==========
-    local wrapPanel = new("Frame", {
+    -- ===== CHARM PANEL =====
+    local charmPanel = new("Frame", {
         Parent = vis,
         Size = UDim2.new(1, 0, 0, 0),
         AutomaticSize = Enum.AutomaticSize.Y,
@@ -1998,247 +2034,275 @@ do
         Visible = false,
         LayoutOrder = 40,
     })
-    corner(wrapPanel, 8)
+    corner(charmPanel, 8)
     do
         local pad = Instance.new("UIPadding")
-        pad.PaddingTop = UDim.new(0, 6)
-        pad.PaddingBottom = UDim.new(0, 6)
-        pad.PaddingLeft = UDim.new(0, 6)
-        pad.PaddingRight = UDim.new(0, 6)
-        pad.Parent = wrapPanel
+        pad.PaddingTop = UDim.new(0, 6) pad.PaddingBottom = UDim.new(0, 6)
+        pad.PaddingLeft = UDim.new(0, 6) pad.PaddingRight = UDim.new(0, 6)
+        pad.Parent = charmPanel
         local lay = Instance.new("UIListLayout")
         lay.SortOrder = Enum.SortOrder.LayoutOrder
         lay.Padding = UDim.new(0, 4)
-        lay.Parent = wrapPanel
+        lay.Parent = charmPanel
     end
 
-    local wrapSearch = new("TextBox", {
-        Parent = wrapPanel,
-        Size = UDim2.new(1, 0, 0, 26),
-        BackgroundColor3 = Color3.fromRGB(22, 22, 30),
-        BorderSizePixel = 0,
-        PlaceholderText = "search wrap...",
-        Text = "",
-        TextColor3 = Color3.fromRGB(210, 220, 240),
+    new("TextLabel", {
+        Parent = charmPanel,
+        Size = UDim2.new(1, 0, 0, 36),
+        BackgroundTransparency = 1,
+        Text = "1) Pick the charm you OWN (equipped). 2) Pick the charm look you want. Apply swaps owned → visual.",
+        TextColor3 = Color3.fromRGB(140, 150, 170),
         Font = Enum.Font.Gotham,
-        TextSize = 12,
-        ClearTextOnFocus = false,
+        TextSize = 11,
+        TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
         LayoutOrder = 1,
     })
-    corner(wrapSearch, 6)
 
-    local wrapSelLbl = new("TextLabel", {
-        Parent = wrapPanel,
+    local ownedCharm = CFG.CharmOwned or ""
+    local wantCharm = CFG.CharmWant or ""
+
+    local ownedLbl = new("TextLabel", {
+        Parent = charmPanel,
         Size = UDim2.new(1, 0, 0, 18),
         BackgroundTransparency = 1,
-        Text = "wrap: —",
+        Text = "owned: —",
         TextColor3 = Color3.fromRGB(160, 170, 190),
         Font = Enum.Font.Code,
         TextSize = 11,
         TextXAlignment = Enum.TextXAlignment.Left,
         LayoutOrder = 2,
     })
+    local wantLbl = new("TextLabel", {
+        Parent = charmPanel,
+        Size = UDim2.new(1, 0, 0, 18),
+        BackgroundTransparency = 1,
+        Text = "replace with: —",
+        TextColor3 = Color3.fromRGB(160, 170, 190),
+        Font = Enum.Font.Code,
+        TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        LayoutOrder = 3,
+    })
 
-    local wrapListHolder = new("Frame", {
-        Parent = wrapPanel,
+    local charmSearch = new("TextBox", {
+        Parent = charmPanel,
+        Size = UDim2.new(1, 0, 0, 26),
+        BackgroundColor3 = Color3.fromRGB(22, 22, 30),
+        BorderSizePixel = 0,
+        PlaceholderText = "search charms...",
+        Text = "",
+        TextColor3 = Color3.fromRGB(210, 220, 240),
+        Font = Enum.Font.Gotham,
+        TextSize = 12,
+        ClearTextOnFocus = false,
+        LayoutOrder = 4,
+    })
+    corner(charmSearch, 6)
+
+    local charmListHolder = new("Frame", {
+        Parent = charmPanel,
         Size = UDim2.new(1, 0, 0, 160),
         BackgroundColor3 = Color3.fromRGB(12, 12, 16),
         BorderSizePixel = 0,
         ClipsDescendants = true,
-        LayoutOrder = 3,
+        LayoutOrder = 5,
     })
-    corner(wrapListHolder, 6)
-    local wrapScroll = Instance.new("ScrollingFrame")
-    wrapScroll.Size = UDim2.new(1, -4, 1, -4)
-    wrapScroll.Position = UDim2.new(0, 2, 0, 2)
-    wrapScroll.BackgroundTransparency = 1
-    wrapScroll.BorderSizePixel = 0
-    wrapScroll.ScrollBarThickness = 4
-    wrapScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-    wrapScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    wrapScroll.Parent = wrapListHolder
-    local wrapLayout = Instance.new("UIListLayout")
-    wrapLayout.Parent = wrapScroll
-    wrapLayout.SortOrder = Enum.SortOrder.Name
-    wrapLayout.Padding = UDim.new(0, 2)
+    corner(charmListHolder, 6)
+    local charmScroll = Instance.new("ScrollingFrame")
+    charmScroll.Size = UDim2.new(1, -4, 1, -4)
+    charmScroll.Position = UDim2.new(0, 2, 0, 2)
+    charmScroll.BackgroundTransparency = 1
+    charmScroll.BorderSizePixel = 0
+    charmScroll.ScrollBarThickness = 4
+    charmScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    charmScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    charmScroll.Parent = charmListHolder
+    local charmLayout = Instance.new("UIListLayout")
+    charmLayout.Parent = charmScroll
+    charmLayout.SortOrder = Enum.SortOrder.Name
+    charmLayout.Padding = UDim.new(0, 2)
 
-    local selectedWrapName = CFG.WrapId or ""
+    local charmPickMode = "owned" -- or "want"
 
-    local function clearWrapRows()
-        for _, c in ipairs(wrapScroll:GetChildren()) do
+    local modeRow = new("Frame", {
+        Parent = charmPanel,
+        Size = UDim2.new(1, 0, 0, 28),
+        BackgroundTransparency = 1,
+        LayoutOrder = 4.5,
+    })
+    -- layout order fix: put mode before list — reparent order via LayoutOrder
+    modeRow.LayoutOrder = 4
+    charmSearch.LayoutOrder = 5
+    charmListHolder.LayoutOrder = 6
+
+    local function styleModeBtn(btn, on)
+        btn.BackgroundColor3 = on and Color3.fromRGB(40, 60, 100) or Color3.fromRGB(28, 28, 36)
+    end
+    local btnOwned = Instance.new("TextButton")
+    btnOwned.Size = UDim2.new(0.5, -4, 1, 0)
+    btnOwned.BackgroundColor3 = Color3.fromRGB(40, 60, 100)
+    btnOwned.BorderSizePixel = 0
+    btnOwned.Text = "1 · Select OWNED"
+    btnOwned.TextColor3 = Color3.fromRGB(210, 215, 230)
+    btnOwned.Font = Enum.Font.Gotham
+    btnOwned.TextSize = 11
+    btnOwned.Parent = modeRow
+    Instance.new("UICorner", btnOwned).CornerRadius = UDim.new(0, 6)
+    local btnWant = Instance.new("TextButton")
+    btnWant.Size = UDim2.new(0.5, -4, 1, 0)
+    btnWant.Position = UDim2.new(0.5, 4, 0, 0)
+    btnWant.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+    btnWant.BorderSizePixel = 0
+    btnWant.Text = "2 · Select LOOK"
+    btnWant.TextColor3 = Color3.fromRGB(210, 215, 230)
+    btnWant.Font = Enum.Font.Gotham
+    btnWant.TextSize = 11
+    btnWant.Parent = modeRow
+    Instance.new("UICorner", btnWant).CornerRadius = UDim.new(0, 6)
+    btnOwned.MouseButton1Click:Connect(function()
+        charmPickMode = "owned"
+        styleModeBtn(btnOwned, true) styleModeBtn(btnWant, false)
+    end)
+    btnWant.MouseButton1Click:Connect(function()
+        charmPickMode = "want"
+        styleModeBtn(btnOwned, false) styleModeBtn(btnWant, true)
+    end)
+
+    local function listCharms()
+        for _, c in ipairs(charmScroll:GetChildren()) do
             if c:IsA("TextButton") then c:Destroy() end
         end
-    end
-
-    local function fillWrapList(filter)
-        clearWrapRows()
-        filter = string.lower(filter or "")
-        local def = Instance.new("TextButton")
-        def.Size = UDim2.new(1, -6, 0, 22)
-        def.BackgroundColor3 = Color3.fromRGB(30, 40, 36)
-        def.BorderSizePixel = 0
-        def.Text = "  [DEFAULT] no wrap"
-        def.TextColor3 = Color3.fromRGB(140, 220, 160)
-        def.Font = Enum.Font.Code
-        def.TextSize = 11
-        def.TextXAlignment = Enum.TextXAlignment.Left
-        def.Name = "0_default"
-        def.Parent = wrapScroll
-        Instance.new("UICorner", def).CornerRadius = UDim.new(0, 4)
-        def.MouseButton1Click:Connect(function()
-            selectedWrapName = ""
-            CFG.WrapId = ""
-            wrapSelLbl.Text = "wrap: (default)"
-        end)
-
+        local filter = string.lower(charmSearch.Text or "")
         local names = {}
-        for name, _ in pairs(EconWraps) do
-            if filter == "" or string.find(string.lower(name), filter, 1, true) then
-                names[#names + 1] = name
+        pcall(function()
+            local ps = LocalPlayer:FindFirstChild("PlayerScripts")
+            local assets = ps and ps:FindFirstChild("Assets")
+            local charms = assets and assets:FindFirstChild("Charms")
+            if not charms then return end
+            for _, ch in ipairs(charms:GetChildren()) do
+                if ch:IsA("Model") or ch:IsA("Folder") or ch:IsA("BasePart") then
+                    local n = ch.Name
+                    if filter == "" or string.find(string.lower(n), filter, 1, true) then
+                        names[#names + 1] = n
+                    end
+                end
             end
-        end
+        end)
         table.sort(names)
         for _, name in ipairs(names) do
             local btn = Instance.new("TextButton")
             btn.Size = UDim2.new(1, -6, 0, 22)
             btn.BackgroundColor3 = Color3.fromRGB(26, 26, 34)
             btn.BorderSizePixel = 0
-            local rar = EconWraps[name] and EconWraps[name].rarity
-            btn.Text = "  " .. name .. (rar and ("  ·  " .. rar) or "")
+            btn.Text = "  " .. name
             btn.TextColor3 = Color3.fromRGB(210, 215, 230)
             btn.Font = Enum.Font.Code
             btn.TextSize = 11
             btn.TextXAlignment = Enum.TextXAlignment.Left
-            btn.Name = name
-            btn.Parent = wrapScroll
+            btn.Parent = charmScroll
             Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
             local captured = name
             btn.MouseButton1Click:Connect(function()
-                selectedWrapName = captured
-                CFG.WrapId = captured
-                wrapSelLbl.Text = "wrap: " .. captured
-                Notify("wrap " .. captured, Color3.fromRGB(90, 200, 140))
+                if charmPickMode == "owned" then
+                    ownedCharm = captured
+                    CFG.CharmOwned = captured
+                    ownedLbl.Text = "owned: " .. captured
+                    Notify("owned charm: " .. captured, Color3.fromRGB(90, 200, 140))
+                else
+                    wantCharm = captured
+                    CFG.CharmWant = captured
+                    wantLbl.Text = "replace with: " .. captured
+                    Notify("look: " .. captured, Color3.fromRGB(90, 200, 140))
+                end
             end)
         end
+        Notify(#names .. " charms", Color3.fromRGB(90, 200, 140))
     end
 
-    wrapSearch:GetPropertyChangedSignal("Text"):Connect(function()
-        fillWrapList(wrapSearch.Text)
-    end)
+    charmSearch:GetPropertyChangedSignal("Text"):Connect(listCharms)
 
-    local function applyWrapToTools(wrapName)
-        local data = EconWraps[wrapName]
-        if not data then return false, "no wrap data" end
-        local char = LocalPlayer.Character
-        if not char then return false, "no character" end
-
-        local function applyGroup(part, g)
-            if not g or not part then return end
-            pcall(function()
-                if g.color and #g.color >= 3 then
-                    part.Color = Color3.new(g.color[1], g.color[2], g.color[3])
-                end
-                if g.mat then
-                    local ok, mat = pcall(function() return Enum.Material[g.mat] end)
-                    if ok and mat then part.Material = mat end
-                end
-                if g.t then part.Transparency = g.t end
-                if g.tex then
-                    -- try texture/decal id names as SurfaceAppearance is game-side; set MaterialVariant if exists
-                    pcall(function()
-                        if part:IsA("MeshPart") then
-                            -- keep mesh; material already set
+    local function applyCharmSwap()
+        if ownedCharm == "" or wantCharm == "" then
+            Notify("set OWNED and LOOK first", Color3.fromRGB(230, 120, 100))
+            return
+        end
+        -- remote attempts
+        local remote = getEquipCosmeticRemote()
+        if remote then
+            pcall(function() remote:FireServer("Charm", ownedCharm, wantCharm) end)
+            pcall(function() remote:FireServer({ Type = "Charm", From = ownedCharm, To = wantCharm }) end)
+            pcall(function() remote:FireServer({ cosmeticType = "Charm", id = wantCharm, owned = ownedCharm }) end)
+            pcall(function() remote:FireServer(wantCharm) end)
+        end
+        -- client visual: clone look model children onto owned charm model if both under Assets.Charms
+        local ok = pcall(function()
+            local ps = LocalPlayer:FindFirstChild("PlayerScripts")
+            local charms = ps and ps:FindFirstChild("Assets") and ps.Assets:FindFirstChild("Charms")
+            if not charms then return end
+            local ownedM = charms:FindFirstChild(ownedCharm)
+            local wantM = charms:FindFirstChild(wantCharm)
+            if not ownedM or not wantM then return end
+            -- tag swap on getgenv for any game charm renderer
+            if getgenv then
+                getgenv().FW_CharmSwap = getgenv().FW_CharmSwap or {}
+                getgenv().FW_CharmSwap[ownedCharm] = wantCharm
+            end
+            -- best-effort: if owned is a Model, try replace appearance parts from want
+            if ownedM:IsA("Model") and wantM:IsA("Model") then
+                for _, d in ipairs(ownedM:GetDescendants()) do
+                    if d:IsA("BasePart") or d:IsA("MeshPart") then
+                        local match = wantM:FindFirstChild(d.Name, true)
+                        if match and (match:IsA("BasePart") or match:IsA("MeshPart")) then
+                            pcall(function()
+                                d.Color = match.Color
+                                d.Material = match.Material
+                                d.Transparency = match.Transparency
+                                if d:IsA("MeshPart") and match:IsA("MeshPart") then
+                                    d.MeshId = match.MeshId
+                                    d.TextureID = match.TextureID
+                                end
+                            end)
                         end
-                    end)
-                end
-            end)
-        end
-
-        local function tintModel(model)
-            local parts = {}
-            for _, d in ipairs(model:GetDescendants()) do
-                if d:IsA("BasePart") or d:IsA("MeshPart") then
-                    parts[#parts + 1] = d
-                end
-            end
-            for i, part in ipairs(parts) do
-                local g = data.g1
-                if i % 3 == 2 and data.g2 then g = data.g2
-                elseif i % 3 == 0 and data.g3 then g = data.g3 end
-                applyGroup(part, g)
-            end
-        end
-
-        for _, t in ipairs(char:GetChildren()) do
-            if t:IsA("Tool") or t:IsA("Model") then tintModel(t) end
-        end
-        -- also viewmodel weapons folder
-        pcall(function()
-            local vms = getViewModels()
-            local weapons = vms and vms:FindFirstChild("Weapons")
-            if weapons then
-                for _, w in ipairs(weapons:GetChildren()) do
-                    tintModel(w)
+                    end
                 end
             end
         end)
-        if getgenv then getgenv().FW_ActiveWrap = wrapName end
-        return true, "wrap applied"
+        Notify("charm " .. ownedCharm .. " → " .. wantCharm, Color3.fromRGB(90, 200, 140))
     end
 
-    local applyWrapBtn = new("TextButton", {
-        Parent = wrapPanel,
+    local applyCharmBtn = new("TextButton", {
+        Parent = charmPanel,
         Size = UDim2.new(1, 0, 0, 28),
-        BackgroundColor3 = Color3.fromRGB(50, 70, 100),
+        BackgroundColor3 = Color3.fromRGB(70, 60, 110),
         BorderSizePixel = 0,
-        Text = "Apply wrap (local materials)",
+        Text = "Apply charm swap",
         TextColor3 = Color3.fromRGB(230, 240, 235),
         Font = Enum.Font.GothamBold,
         TextSize = 12,
         LayoutOrder = 10,
     })
-    corner(applyWrapBtn, 6)
-    applyWrapBtn.MouseButton1Click:Connect(function()
-        if selectedWrapName == "" then
-            Notify("pick a wrap or DEFAULT", Color3.fromRGB(230, 120, 100))
-            return
-        end
-        -- also try EquipCosmetic as Wrap
-        local remote = getEquipCosmeticRemote()
-        if remote then
-            pcall(function() remote:FireServer("Wrap", selectedWrapName) end)
-            pcall(function() remote:FireServer({ Type = "Wrap", Name = selectedWrapName }) end)
-            pcall(function() remote:FireServer({ cosmeticType = "Wrap", id = selectedWrapName }) end)
-        end
-        local ok, msg = applyWrapToTools(selectedWrapName)
-        Notify(ok and ("wrap " .. selectedWrapName) or tostring(msg), ok and Color3.fromRGB(90, 200, 140) or Color3.fromRGB(230, 120, 100))
-    end)
+    corner(applyCharmBtn, 6)
+    applyCharmBtn.MouseButton1Click:Connect(applyCharmSwap)
 
-    -- toggles that show panels
+    makeButton(charmPanel, "Refresh charm list", listCharms)
+
+    -- toggles
     makeToggle(vis, "Skin changer", false, function(v)
         skinPanel.Visible = v
         if v then
-            ensureEconLoaded(function(ok)
-                fillSkinList(skinSearch.Text)
-                if not ok then
-                    Notify("Econ skins not preloaded — listing ViewModels. Host FW_Skins.luau for full anims/icons.", Color3.fromRGB(230, 180, 100))
-                end
+            ensureSkinsLoaded(function()
+                fillSkinList()
             end)
-            fillSkinList(skinSearch.Text)
+            fillSkinList()
         end
     end)
 
-    makeToggle(vis, "Wrap changer", false, function(v)
-        wrapPanel.Visible = v
-        if v then
-            ensureEconLoaded(function()
-                fillWrapList(wrapSearch.Text)
-            end)
-            fillWrapList(wrapSearch.Text)
-        end
+    makeToggle(vis, "Charm changer", false, function(v)
+        charmPanel.Visible = v
+        if v then listCharms() end
     end)
 
-    -- keep avatar/tint section compact below
     makeSection(vis, "AVATAR (optional)")
     makeToggle(vis, "Force avatar from UserId", CFG.SkinForceAvatar, function(v) CFG.SkinForceAvatar = v end)
     local uidBox = new("TextBox", {
