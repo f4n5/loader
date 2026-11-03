@@ -88,6 +88,10 @@ local CFG = {
     AimPred         = 0,
     AimShowFOV      = true,
     AimNPCs         = true,  -- target Rivals dummies / NPC humanoids
+    SpoofLeaderstats = false,
+    SpoofLevel       = 1,
+    SpoofStreak      = 0,
+    SpoofRank        = 0,
     SkinEnabled     = false,
     SkinUserId      = 0,     -- copy avatar from this user id (0 = off)
     SkinToolTint    = false, -- tint ONLY on button / if enabled — no loop
@@ -490,8 +494,8 @@ local function GetClosest(targetType, maxFOV, maxDist, wallCheck, teamCheck)
             end
         end
     end
-    -- Rivals dummies / NPCs
-    if CFG.AimNPCs then
+    -- Rivals dummies / NPCs (only when AimNPCs and a combat module is actually on)
+    if CFG.AimNPCs and (CFG.Aimbot or CFG.Silent or CFG.DeathLock or CFG.TriggerBot) then
         for _, model in ipairs(CollectNPCModels()) do
             local part = GetPart(model, targetType)
             if not part then
@@ -568,7 +572,7 @@ local function GetClosestDeathLock(targetType, maxFOV, maxDist, wallCheck, teamC
         end
     end
         -- dummies / NPCs for deathlock
-    if CFG.AimNPCs then
+    if CFG.AimNPCs and (CFG.DeathLock or CFG.Aimbot or CFG.Silent) then
         for _, model in ipairs(CollectNPCModels()) do
             local part = GetPart(model, targetType)
             if not part then
@@ -1785,19 +1789,34 @@ do
         lab.Parent = skinScroll
     end
 
-    local function addSkinRow(text, order, onClick, isDefault)
+    local function addSkinRow(text, order, onClick, isDefault, iconId)
         local btn = Instance.new("TextButton")
-        btn.Size = UDim2.new(1, -6, 0, 22)
+        btn.Size = UDim2.new(1, -6, 0, 26)
         btn.BackgroundColor3 = isDefault and Color3.fromRGB(30, 40, 36) or Color3.fromRGB(26, 26, 34)
         btn.BorderSizePixel = 0
-        btn.Text = "  " .. text
-        btn.TextColor3 = isDefault and Color3.fromRGB(140, 220, 160) or Color3.fromRGB(210, 215, 230)
-        btn.Font = Enum.Font.Code
-        btn.TextSize = 11
-        btn.TextXAlignment = Enum.TextXAlignment.Left
+        btn.Text = ""
         btn.LayoutOrder = order
         btn.Parent = skinScroll
         Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
+        if iconId then
+            local img = Instance.new("ImageLabel")
+            img.Size = UDim2.new(0, 22, 0, 22)
+            img.Position = UDim2.new(0, 4, 0.5, -11)
+            img.BackgroundTransparency = 1
+            img.Image = iconId
+            img.ScaleType = Enum.ScaleType.Fit
+            img.Parent = btn
+        end
+        local lab = Instance.new("TextLabel")
+        lab.Size = UDim2.new(1, iconId and -30 or -8, 1, 0)
+        lab.Position = UDim2.new(0, iconId and 28 or 6, 0, 0)
+        lab.BackgroundTransparency = 1
+        lab.Text = text
+        lab.TextColor3 = isDefault and Color3.fromRGB(140, 220, 160) or Color3.fromRGB(210, 215, 230)
+        lab.Font = Enum.Font.Code
+        lab.TextSize = 11
+        lab.TextXAlignment = Enum.TextXAlignment.Left
+        lab.Parent = btn
         if onClick then btn.MouseButton1Click:Connect(onClick) end
         return btn
     end
@@ -1879,14 +1898,22 @@ do
                     order = order + 1
                     local captured = skinName
                     local capturedW = wpn
+                    local iconId = nil
+                    local sdata = EconSkins[skinName]
+                    if sdata and sdata.image then
+                        iconId = sdata.image
+                    end
                     addSkinRow(skinName, order, function()
                         selectedSkinName = captured
                         selectedSkinWeapon = capturedW
                         CFG.SkinId = captured
                         CFG.SkinWeapon = capturedW
                         skinWeaponLbl.Text = "weapon: " .. capturedW .. "  ·  skin: " .. captured
+                        if iconId then
+                            skinWeaponLbl.Text = skinWeaponLbl.Text .. "  ·  icon ok"
+                        end
                         Notify(captured .. " → " .. capturedW, Color3.fromRGB(90, 200, 140))
-                    end)
+                    end, false, iconId)
                 end
             end
         end
@@ -1982,6 +2009,27 @@ do
             getgenv().FW_ActiveSkinAnimsReverse = data.animsReverse
             getgenv().FW_ActiveSkinName = skinName
         end
+        -- preview: play one equip/shoot sound from AnimationLibrary.SoundCallbacks if present
+        pcall(function()
+            local rs = game:GetService("ReplicatedStorage")
+            local sc = rs:FindFirstChild("Modules") and rs.Modules:FindFirstChild("AnimationLibrary") and rs.Modules.AnimationLibrary:FindFirstChild("SoundCallbacks")
+            if not sc or not data.anims then return end
+            local tryKeys = {}
+            for logical, cbName in pairs(data.anims) do
+                if logical == "equip" or logical == "Shoot1" or logical == "shoot1" or logical == "idle" then
+                    tryKeys[#tryKeys + 1] = cbName
+                end
+            end
+            for _, key in ipairs(tryKeys) do
+                local mod = sc:FindFirstChild(key)
+                if mod then
+                    -- SoundCallbacks modules often return functions; can't always extract id.
+                    -- Store active key for hooks.
+                    if getgenv then getgenv().FW_ActiveSoundKey = key end
+                    break
+                end
+            end
+        end)
         if data.rootoffset then
             pcall(function()
                 local vms = getViewModels()
@@ -2235,40 +2283,87 @@ do
             pcall(function() remote:FireServer({ cosmeticType = "Charm", id = wantCharm, owned = ownedCharm }) end)
             pcall(function() remote:FireServer(wantCharm) end)
         end
-        -- client visual: clone look model children onto owned charm model if both under Assets.Charms
+        -- client visual: NEVER mutate Assets.Charms library (that bleached the owned asset).
+        -- Only tag swap + try live instances under Character / current tools.
         local ok = pcall(function()
             local ps = LocalPlayer:FindFirstChild("PlayerScripts")
             local charms = ps and ps:FindFirstChild("Assets") and ps.Assets:FindFirstChild("Charms")
-            if not charms then return end
-            local ownedM = charms:FindFirstChild(ownedCharm)
-            local wantM = charms:FindFirstChild(wantCharm)
-            if not ownedM or not wantM then return end
-            -- tag swap on getgenv for any game charm renderer
+            local wantM = charms and charms:FindFirstChild(wantCharm)
             if getgenv then
                 getgenv().FW_CharmSwap = getgenv().FW_CharmSwap or {}
                 getgenv().FW_CharmSwap[ownedCharm] = wantCharm
             end
-            -- best-effort: if owned is a Model, try replace appearance parts from want
-            if ownedM:IsA("Model") and wantM:IsA("Model") then
-                for _, d in ipairs(ownedM:GetDescendants()) do
-                    if d:IsA("BasePart") or d:IsA("MeshPart") then
-                        local match = wantM:FindFirstChild(d.Name, true)
-                        if match and (match:IsA("BasePart") or match:IsA("MeshPart")) then
-                            pcall(function()
-                                d.Color = match.Color
-                                d.Material = match.Material
-                                d.Transparency = match.Transparency
-                                if d:IsA("MeshPart") and match:IsA("MeshPart") then
+            if not wantM then return end
+
+            local function restyleLive(inst)
+                if not inst then return end
+                -- remove previous FW overlay
+                for _, c in ipairs(inst:GetChildren()) do
+                    if c.Name == "FW_CharmOverlay" then c:Destroy() end
+                end
+                local overlay = Instance.new("Model")
+                overlay.Name = "FW_CharmOverlay"
+                for _, d in ipairs(wantM:GetDescendants()) do
+                    if d:IsA("BasePart") or d:IsA("MeshPart") or d:IsA("SpecialMesh") or d:IsA("Decal") then
+                        local cl = d:Clone()
+                        cl.Parent = overlay
+                    end
+                end
+                -- if want is a Model, clone top-level visual parts welded to inst root
+                local root = inst:IsA("BasePart") and inst or inst:FindFirstChildWhichIsA("BasePart", true)
+                if root then
+                    for _, cl in ipairs(overlay:GetDescendants()) do
+                        if cl:IsA("BasePart") then
+                            cl.Anchored = false
+                            cl.CanCollide = false
+                            cl.Massless = true
+                            local w = Instance.new("WeldConstraint")
+                            w.Part0 = root
+                            w.Part1 = cl
+                            w.Parent = cl
+                            cl.CFrame = root.CFrame
+                        end
+                    end
+                    overlay.Parent = inst
+                else
+                    overlay:Destroy()
+                    -- fallback: copy mesh/texture onto matching part names only on LIVE inst (not Assets)
+                    for _, d in ipairs(inst:GetDescendants()) do
+                        if d:IsA("MeshPart") then
+                            local match = wantM:FindFirstChild(d.Name, true)
+                            if match and match:IsA("MeshPart") then
+                                pcall(function()
                                     d.MeshId = match.MeshId
                                     d.TextureID = match.TextureID
-                                end
-                            end)
+                                    d.Color = match.Color
+                                    d.Material = match.Material
+                                end)
+                            end
                         end
                     end
                 end
             end
+
+            -- live: character accessories / tools named like owned charm
+            local char = LocalPlayer.Character
+            if char then
+                for _, d in ipairs(char:GetDescendants()) do
+                    if d.Name == ownedCharm or (d:IsA("Model") and d.Name:find(ownedCharm, 1, true)) then
+                        restyleLive(d)
+                    end
+                end
+            end
+            -- live: viewmodel / camera charms
+            pcall(function()
+                local cam = workspace.CurrentCamera
+                if cam then
+                    for _, d in ipairs(cam:GetDescendants()) do
+                        if d.Name == ownedCharm then restyleLive(d) end
+                    end
+                end
+            end)
         end)
-        Notify("charm " .. ownedCharm .. " → " .. wantCharm, Color3.fromRGB(90, 200, 140))
+        Notify("charm " .. ownedCharm .. " → " .. wantCharm .. " (live only)", Color3.fromRGB(90, 200, 140))
     end
 
     local applyCharmBtn = new("TextButton", {
@@ -2302,6 +2397,215 @@ do
         charmPanel.Visible = v
         if v then listCharms() end
     end)
+
+
+    -- ===== LEADERSTATS SPOOF =====
+    local spoofPanel = new("Frame", {
+        Parent = vis,
+        Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundColor3 = Color3.fromRGB(16, 16, 22),
+        BorderSizePixel = 0,
+        Visible = false,
+        LayoutOrder = 70,
+    })
+    corner(spoofPanel, 8)
+    do
+        local pad = Instance.new("UIPadding")
+        pad.PaddingTop = UDim.new(0, 6) pad.PaddingBottom = UDim.new(0, 6)
+        pad.PaddingLeft = UDim.new(0, 6) pad.PaddingRight = UDim.new(0, 6)
+        pad.Parent = spoofPanel
+        local lay = Instance.new("UIListLayout")
+        lay.SortOrder = Enum.SortOrder.LayoutOrder
+        lay.Padding = UDim.new(0, 6)
+        lay.Parent = spoofPanel
+    end
+
+    new("TextLabel", {
+        Parent = spoofPanel,
+        Size = UDim2.new(1, 0, 0, 32),
+        BackgroundTransparency = 1,
+        Text = "Local only — sets IntValues under CustomLeaderstats / leaderstats. Others still see real server values.",
+        TextColor3 = Color3.fromRGB(140, 150, 170),
+        Font = Enum.Font.Gotham,
+        TextSize = 11,
+        TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        LayoutOrder = 1,
+    })
+
+    local function makeSpoofSlider(parent, label, minV, maxV, defaultV, order, onChange)
+        local row = new("Frame", {
+            Parent = parent,
+            Size = UDim2.new(1, 0, 0, 40),
+            BackgroundTransparency = 1,
+            LayoutOrder = order,
+        })
+        local top = new("TextLabel", {
+            Parent = row,
+            Size = UDim2.new(1, -70, 0, 16),
+            BackgroundTransparency = 1,
+            Text = label,
+            TextColor3 = Color3.fromRGB(200, 205, 220),
+            Font = Enum.Font.Gotham,
+            TextSize = 12,
+            TextXAlignment = Enum.TextXAlignment.Left,
+        })
+        local valLab = new("TextLabel", {
+            Parent = row,
+            Size = UDim2.new(0, 64, 0, 16),
+            Position = UDim2.new(1, -64, 0, 0),
+            BackgroundTransparency = 1,
+            Text = tostring(defaultV),
+            TextColor3 = Color3.fromRGB(140, 180, 255),
+            Font = Enum.Font.Code,
+            TextSize = 12,
+            TextXAlignment = Enum.TextXAlignment.Right,
+        })
+        local bar = Instance.new("TextButton")
+        bar.Size = UDim2.new(1, 0, 0, 16)
+        bar.Position = UDim2.new(0, 0, 0, 20)
+        bar.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+        bar.BorderSizePixel = 0
+        bar.Text = ""
+        bar.AutoButtonColor = false
+        bar.Parent = row
+        Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 4)
+        local fill = Instance.new("Frame")
+        fill.Size = UDim2.new(math.clamp((defaultV - minV) / math.max(1, maxV - minV), 0, 1), 0, 1, 0)
+        fill.BackgroundColor3 = Color3.fromRGB(70, 110, 200)
+        fill.BorderSizePixel = 0
+        fill.Parent = bar
+        Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 4)
+        local cur = defaultV
+        local function setFromAlpha(a)
+            a = math.clamp(a, 0, 1)
+            local v = math.floor(minV + (maxV - minV) * a + 0.5)
+            cur = v
+            fill.Size = UDim2.new(a, 0, 1, 0)
+            valLab.Text = tostring(v)
+            if onChange then onChange(v) end
+        end
+        local dragging = false
+        local function fromInput(x)
+            local abs = bar.AbsolutePosition.X
+            local w = bar.AbsoluteSize.X
+            if w < 1 then return end
+            setFromAlpha((x - abs) / w)
+        end
+        bar.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                fromInput(input.Position.X)
+            end
+        end)
+        UserInputService.InputChanged:Connect(function(input)
+            if not dragging then return end
+            if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+                fromInput(input.Position.X)
+            end
+        end)
+        UserInputService.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = false
+            end
+        end)
+        return function(v)
+            local a = math.clamp((v - minV) / math.max(1, maxV - minV), 0, 1)
+            setFromAlpha(a)
+        end
+    end
+
+    local spoofLevel = CFG.SpoofLevel or 1
+    local spoofStreak = CFG.SpoofStreak or 0
+    local spoofRank = CFG.SpoofRank or 0
+
+    makeSpoofSlider(spoofPanel, "Level", 1, 999, spoofLevel, 2, function(v)
+        spoofLevel = v
+        CFG.SpoofLevel = v
+    end)
+    makeSpoofSlider(spoofPanel, "Win Streak", 0, 500, spoofStreak, 3, function(v)
+        spoofStreak = v
+        CFG.SpoofStreak = v
+    end)
+    makeSpoofSlider(spoofPanel, "Rank (ELO / points)", 0, 150000, spoofRank, 4, function(v)
+        spoofRank = v
+        CFG.SpoofRank = v
+    end)
+
+    local function findLeaderstatFolders()
+        local out = {}
+        for _, name in ipairs({ "CustomLeaderstats", "leaderstats", "Leaderstats", "stats", "Stats" }) do
+            local f = LocalPlayer:FindFirstChild(name)
+            if f then out[#out + 1] = f end
+        end
+        return out
+    end
+
+    local function setStatValue(folder, names, value)
+        for _, n in ipairs(names) do
+            local v = folder:FindFirstChild(n)
+            if v and (v:IsA("IntValue") or v:IsA("NumberValue") or v:IsA("StringValue")) then
+                pcall(function()
+                    if v:IsA("StringValue") then
+                        v.Value = tostring(value)
+                    else
+                        v.Value = value
+                    end
+                end)
+                return true
+            end
+        end
+        return false
+    end
+
+    local spoofConn = nil
+    local function applySpoofOnce()
+        local folders = findLeaderstatFolders()
+        if #folders == 0 then return false end
+        local okAny = false
+        for _, folder in ipairs(folders) do
+            if setStatValue(folder, { "Level", "level", "Lvl" }, spoofLevel) then okAny = true end
+            if setStatValue(folder, { "Win Streak", "WinStreak", "Streak", "winstreak" }, spoofStreak) then okAny = true end
+            if setStatValue(folder, { "Current ELO", "ELO", "Elo", "Rank", "MMR", "Points", "RP" }, spoofRank) then okAny = true end
+        end
+        return okAny
+    end
+
+    local function startSpoofLoop()
+        if spoofConn then return end
+        spoofConn = RunService.Heartbeat:Connect(function()
+            if not CFG.SpoofLeaderstats then return end
+            applySpoofOnce()
+        end)
+    end
+    local function stopSpoofLoop()
+        if spoofConn then
+            spoofConn:Disconnect()
+            spoofConn = nil
+        end
+    end
+
+    makeButton(spoofPanel, "Apply spoof now", function()
+        local ok = applySpoofOnce()
+        Notify(ok and string.format("spoof L%d  streak %d  rank %d", spoofLevel, spoofStreak, spoofRank)
+            or "no CustomLeaderstats / leaderstats found",
+            ok and Color3.fromRGB(90, 200, 140) or Color3.fromRGB(230, 120, 100))
+    end)
+
+    makeToggle(vis, "Leaderstats spoof", CFG.SpoofLeaderstats == true, function(v)
+        CFG.SpoofLeaderstats = v
+        spoofPanel.Visible = v
+        if v then
+            startSpoofLoop()
+            applySpoofOnce()
+            Notify("leaderstats spoof on (local)", Color3.fromRGB(90, 200, 140))
+        else
+            stopSpoofLoop()
+            Notify("leaderstats spoof off", Color3.fromRGB(230, 180, 100))
+        end
+    end)
+
 
     makeSection(vis, "AVATAR (optional)")
     makeToggle(vis, "Force avatar from UserId", CFG.SkinForceAvatar, function(v) CFG.SkinForceAvatar = v end)
