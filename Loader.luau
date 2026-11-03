@@ -1296,40 +1296,88 @@ makeButton(configs, "Load from file", function()
 end)
 
 makeSection(configs, "UI COLORS")
+CFG.UI_AccentName = CFG.UI_AccentName or "Blue"
+CFG.UI_BgName = CFG.UI_BgName or "Dark"
+CFG.UI_Accent = CFG.UI_Accent or {90, 140, 255}
+CFG.UI_Bg = CFG.UI_Bg or {16, 16, 22}
+
+local ACCENT_MAP = {
+    Blue = {90, 140, 255},
+    Purple = {160, 90, 255},
+    Red = {230, 70, 70},
+    Green = {70, 200, 110},
+    Orange = {255, 160, 50},
+    White = {230, 230, 235},
+}
+local BG_MAP = {
+    Dark = {16, 16, 22},
+    Charcoal = {22, 22, 26},
+    Navy = {12, 16, 28},
+    Black = {8, 8, 10},
+}
+
 local function accentColor()
     local a = CFG.UI_Accent or {90, 140, 255}
     return Color3.fromRGB(a[1] or 90, a[2] or 140, a[3] or 255)
 end
-makeDropdown(configs, "Accent", {"Blue", "Purple", "Red", "Green", "Orange", "White"}, "Blue", function(v)
-    local map = {
-        Blue = {90, 140, 255},
-        Purple = {160, 90, 255},
-        Red = {230, 70, 70},
-        Green = {70, 200, 110},
-        Orange = {255, 160, 50},
-        White = {230, 230, 235},
-    }
-    CFG.UI_Accent = map[v] or map.Blue
+local function bgColor()
+    local b = CFG.UI_Bg or {16, 16, 22}
+    return Color3.fromRGB(b[1] or 16, b[2] or 16, b[3] or 22)
+end
+
+local function applyTheme()
+    local ac = accentColor()
+    local bg = bgColor()
     pcall(function()
+        if main then main.BackgroundColor3 = bg end
+        if topBar then
+            topBar.BackgroundColor3 = Color3.fromRGB(
+                math.clamp((CFG.UI_Bg[1] or 16) + 6, 0, 255),
+                math.clamp((CFG.UI_Bg[2] or 16) + 6, 0, 255),
+                math.clamp((CFG.UI_Bg[3] or 22) + 8, 0, 255)
+            )
+        end
         for _, d in ipairs(ScreenGui:GetDescendants()) do
-            if d:IsA("UIStroke") and d.Thickness <= 1.5 then
-                -- skip
+            if d:IsA("TextLabel") or d:IsA("TextButton") then
+                -- accent-ish blues
+                local c = d.TextColor3
+                local r, g, b = math.floor(c.R * 255 + 0.5), math.floor(c.G * 255 + 0.5), math.floor(c.B * 255 + 0.5)
+                if (r >= 80 and r <= 130 and g >= 130 and g <= 180 and b >= 220) or (r == 120 and g == 160 and b == 255) then
+                    d.TextColor3 = ac
+                end
             end
-            if d:IsA("TextLabel") and d.TextColor3 == Color3.fromRGB(120, 160, 255) then
-                d.TextColor3 = accentColor()
+            if d:IsA("Frame") and d:GetAttribute("FW_ThemedBg") then
+                d.BackgroundColor3 = bg
+            end
+            if d:IsA("UIStroke") and d:GetAttribute("FW_ThemedStroke") then
+                d.Color = ac
+            end
+            -- tab buttons selected state often use accent
+            if d:IsA("TextButton") and d.Parent and d.Parent.Name == "Tabs" then
+                -- leave; selectTab handles
             end
         end
+        -- retint FOV circle if present
+        if FOVCircle and FOVCircle.Parent then
+            pcall(function() FOVCircle.Color3 = ac end)
+        end
     end)
+end
+
+makeDropdown(configs, "Accent", {"Blue", "Purple", "Red", "Green", "Orange", "White"}, CFG.UI_AccentName or "Blue", function(v)
+    CFG.UI_AccentName = v
+    CFG.UI_Accent = ACCENT_MAP[v] or ACCENT_MAP.Blue
+    applyTheme()
+    Notify("accent → " .. v, accentColor())
 end)
-makeDropdown(configs, "Background", {"Dark", "Charcoal", "Navy", "Black"}, "Dark", function(v)
-    local map = {
-        Dark = Color3.fromRGB(16, 16, 22),
-        Charcoal = Color3.fromRGB(22, 22, 26),
-        Navy = Color3.fromRGB(12, 16, 28),
-        Black = Color3.fromRGB(8, 8, 10),
-    }
-    main.BackgroundColor3 = map[v] or map.Dark
+makeDropdown(configs, "Background", {"Dark", "Charcoal", "Navy", "Black"}, CFG.UI_BgName or "Dark", function(v)
+    CFG.UI_BgName = v
+    CFG.UI_Bg = BG_MAP[v] or BG_MAP.Dark
+    applyTheme()
+    Notify("background → " .. v, accentColor())
 end)
+-- apply saved theme once UI exists
+task.defer(applyTheme)
 
 makeSection(configs, "NOTIFICATIONS")
 makeToggle(configs, "Notify rival death (closest)", CFG.NotifyRivalDead ~= false, function(v) CFG.NotifyRivalDead = v end)
@@ -1476,42 +1524,74 @@ end)
 refreshPlayerLists()
 
 makeSection(configs, "AUTOEXECUTE")
+-- Real autoexec = put this loadstring in your executor autoexec folder (Wave/Solara/etc):
+--   loadstring(game:HttpGet("https://raw.githubusercontent.com/f4n5/loader/refs/heads/main/Loader.luau"))()
+-- Toggle below also writes a workspace bootstrap + saves config for next run.
+local AUTOEXEC_LOADSTRING = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/f4n5/loader/refs/heads/main/Loader.luau"))()'
+
 makeToggle(configs, "AutoExecute on inject", CFG.AutoExec, function(v)
     CFG.AutoExec = v
     pcall(function()
-        if type(writefile) ~= "function" then return end
+        if type(writefile) ~= "function" then
+            Notify("executor has no writefile — paste loadstring into autoexec folder manually", Color3.fromRGB(230, 180, 100))
+            return
+        end
         if v then
+            -- save current config
+            writefile(CONFIG_FILE, HttpService:JSONEncode(CFG))
+            -- workspace bootstrap: reload config into getgenv then run loader from github
             local bootstrap = string.format([[
--- Fanware Aim autoexec bootstrap
+-- FW Loader autoexec bootstrap (workspace)
+-- Prefer putting this loadstring in the executor autoexec folder:
+-- %s
 local HttpService = game:GetService("HttpService")
-local ok, body = pcall(function()
+local genv = (type(getgenv) == "function" and getgenv()) or _G
+pcall(function()
     if type(isfile) == "function" and type(readfile) == "function" and isfile("%s") then
-        return readfile("%s")
+        local body = readfile("%s")
+        local ok, t = pcall(function() return HttpService:JSONDecode(body) end)
+        if ok and type(t) == "table" then genv.FanwareAimAutoCFG = t end
     end
 end)
-if ok and body then
-    local ok2, t = pcall(function() return HttpService:JSONDecode(body) end)
-    if ok2 and type(t) == "table" then
-        local genv = (type(getgenv) == "function" and getgenv()) or _G
-        genv.FanwareAimAutoCFG = t
-    end
+local URL = "https://raw.githubusercontent.com/f4n5/loader/refs/heads/main/Loader.luau"
+local ok, body = pcall(function() return game:HttpGet(URL) end)
+if ok and type(body) == "string" and #body > 100 and not body:find("<!DOCTYPE") then
+    local fn, err = loadstring(body)
+    if fn then pcall(fn) else warn("[FW] compile", err) end
+else
+    warn("[FW] HttpGet Loader failed")
 end
-]], CONFIG_FILE, CONFIG_FILE)
+]], AUTOEXEC_LOADSTRING, CONFIG_FILE, CONFIG_FILE)
             writefile(AUTOEXEC_FILE, bootstrap)
-            writefile(CONFIG_FILE, HttpService:JSONEncode(CFG))
+            -- also try common autoexec folder names if executor supports makefolder
+            for _, folder in ipairs({"autoexec", "Autoexec", "AutoExec", "scripts/autoexec"}) do
+                pcall(function()
+                    if type(makefolder) == "function" then makefolder(folder) end
+                    writefile(folder .. "/FW_Loader.luau", AUTOEXEC_LOADSTRING .. "
+")
+                end)
+            end
+            Notify("AutoExec ON — wrote bootstrap + tried autoexec/FW_Loader.luau", Color3.fromRGB(90, 200, 140))
         else
             if type(isfile) == "function" and isfile(AUTOEXEC_FILE) and type(delfile) == "function" then
                 pcall(delfile, AUTOEXEC_FILE)
             end
+            Notify("AutoExec OFF", Color3.fromRGB(230, 180, 100))
         end
     end)
+end)
+
+makeButton(configs, "Copy autoexec loadstring", function()
+    local s = AUTOEXEC_LOADSTRING
+    if setclipboard then pcall(setclipboard, s) end
+    Notify("copied loadstring", Color3.fromRGB(90, 200, 140))
 end)
 
 new("TextLabel", {
     Parent = configs,
     Size = UDim2.new(1, 0, 0, 56),
     BackgroundTransparency = 1,
-    Text = "AutoExec: enable + Save. Put this script (or loadstring) in executor autoexec folder. Bootstrap FanwareAim_AutoExec.txt loads FanwareAim_Config.txt into getgenv before main runs.",
+    Text = "AutoExec: turn ON + Save Config. Put Loader.luau (or the loadstring below) in your executor's autoexec folder so it runs on every inject. Config file FanwareAim_Config.txt is written to workspace and reloaded on start.",
     TextColor3 = Color3.fromRGB(130, 140, 160),
     Font = Enum.Font.Gotham,
     TextSize = 11,
@@ -1536,7 +1616,7 @@ end)
 
 
 
--- VISUALS — skin + wrap changer (Econ data: FW_EconSkins / FW_EconWraps / FW_EconSkinToWeapon)
+-- VISUALS — skin + wrap changer (Econ data: FW_Skins / FW_Wraps / FW_SkinToWeapon)
 do
     local vis = pages["Visuals"]
     if not vis then
@@ -1551,11 +1631,11 @@ do
         return nil
     end
 
-    -- These three modules are shipped next to the script as artifacts/FW_Econ*.luau.
-    -- Loader can HttpGet them; here we also accept getgenv().FW_EconSkins etc. preloaded.
-    local EconSkins = (getgenv and getgenv().FW_EconSkins) or {}
-    local EconWraps = (getgenv and getgenv().FW_EconWraps) or {}
-    local EconSkinToWeapon = (getgenv and getgenv().FW_EconSkinToWeapon) or SkinToWeapon or {}
+    -- Data modules: FW_Skins.luau / FW_Wraps.luau / FW_SkinToWeapon.luau (host on f4n5/loader).
+    -- Loader can HttpGet them; here we also accept getgenv().FW_Skins etc. preloaded.
+    local EconSkins = (getgenv and getgenv().FW_Skins) or {}
+    local EconWraps = (getgenv and getgenv().FW_Wraps) or {}
+    local EconSkinToWeapon = (getgenv and getgenv().FW_SkinToWeapon) or SkinToWeapon or {}
 
     local function ensureEconLoaded(cb)
         if next(EconSkins) and next(EconWraps) then
@@ -1565,12 +1645,12 @@ do
         -- try game HttpGet from common raw paths user may host
         task.spawn(function()
             local bases = {
-                "https://raw.githubusercontent.com/Fansware/something2/main/",
+                "https://raw.githubusercontent.com/f4n5/loader/refs/heads/main/",
             }
             local files = {
-                { "FW_EconSkins.luau", "FW_EconSkins" },
-                { "FW_EconWraps.luau", "FW_EconWraps" },
-                { "FW_EconSkinToWeapon.luau", "FW_EconSkinToWeapon" },
+                { "FW_Skins.luau", "FW_Skins" },
+                { "FW_Wraps.luau", "FW_Wraps" },
+                { "FW_SkinToWeapon.luau", "FW_SkinToWeapon" },
             }
             for _, base in ipairs(bases) do
                 for _, pair in ipairs(files) do
@@ -1590,9 +1670,9 @@ do
                     end
                 end
             end
-            EconSkins = (getgenv and getgenv().FW_EconSkins) or EconSkins
-            EconWraps = (getgenv and getgenv().FW_EconWraps) or EconWraps
-            EconSkinToWeapon = (getgenv and getgenv().FW_EconSkinToWeapon) or EconSkinToWeapon
+            EconSkins = (getgenv and getgenv().FW_Skins) or EconSkins
+            EconWraps = (getgenv and getgenv().FW_Wraps) or EconWraps
+            EconSkinToWeapon = (getgenv and getgenv().FW_SkinToWeapon) or EconSkinToWeapon
             if cb then cb(next(EconSkins) ~= nil) end
         end)
     end
@@ -2142,7 +2222,7 @@ do
             ensureEconLoaded(function(ok)
                 fillSkinList(skinSearch.Text)
                 if not ok then
-                    Notify("Econ skins not preloaded — listing ViewModels. Host FW_EconSkins.luau for full anims/icons.", Color3.fromRGB(230, 180, 100))
+                    Notify("Econ skins not preloaded — listing ViewModels. Host FW_Skins.luau for full anims/icons.", Color3.fromRGB(230, 180, 100))
                 end
             end)
             fillSkinList(skinSearch.Text)
