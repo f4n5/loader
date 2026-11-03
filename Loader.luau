@@ -2370,122 +2370,171 @@ do
             Notify("set OWNED and LOOK first", Color3.fromRGB(230, 120, 100))
             return
         end
-        -- refresh tables
         EconCharms = (getgenv and getgenv().FW_Charms) or EconCharms
+        if not next(EconCharms) then
+            -- try load once
+            pcall(function()
+                local body = game:HttpGet("https://raw.githubusercontent.com/f4n5/loader/refs/heads/main/FW_Charms.luau")
+                if body and #body > 50 and not body:find("<!DOCTYPE") then
+                    local mod = loadstring(body)()
+                    if type(mod) == "table" then
+                        if getgenv then getgenv().FW_Charms = mod end
+                        EconCharms = mod
+                    end
+                end
+            end)
+        end
         local ownedInfo = EconCharms[ownedCharm]
         local wantInfo = EconCharms[wantCharm]
-        if not ownedInfo or not wantInfo then
-            Notify("charm ids missing — load FW_Charms.luau", Color3.fromRGB(230, 120, 100))
-            return
-        end
         if getgenv then
             getgenv().FW_CharmSwap = getgenv().FW_CharmSwap or {}
-            -- owned primary/extra asset ids get replaced by wanted ones
-            getgenv().FW_CharmSwap[ownedCharm] = {
-                to = wantCharm,
-                owned = ownedInfo,
-                want = wantInfo,
-            }
+            getgenv().FW_CharmSwap[ownedCharm] = wantCharm
         end
 
         local function allIds(info)
             local t = {}
-            if info.Primary and info.Primary ~= "0" and info.Primary ~= 0 then
-                t[#t + 1] = tostring(info.Primary)
+            if type(info) ~= "table" then return t end
+            local p = info.Primary
+            if p and tostring(p) ~= "0" and tostring(p) ~= "" then
+                t[#t + 1] = tostring(p)
             end
             if type(info.Extra) == "table" then
                 for _, id in ipairs(info.Extra) do
-                    t[#t + 1] = tostring(id)
+                    local s = tostring(id)
+                    if s ~= "" and s ~= "0" then t[#t + 1] = s end
                 end
             end
             return t
         end
-        local fromIds = allIds(ownedInfo)
-        local toIds = allIds(wantInfo)
-        if #toIds == 0 then
-            Notify("wanted charm has no mesh ids", Color3.fromRGB(230, 120, 100))
-            return
-        end
+
+        local fromIds = ownedInfo and allIds(ownedInfo) or {}
+        local toIds = wantInfo and allIds(wantInfo) or {}
 
         local function assetUri(id)
             id = tostring(id)
-            if id:sub(1, 11) == "rbxassetid:" then return id end
+            if id:sub(1, 13) == "rbxassetid://" then return id end
             return "rbxassetid://" .. id
         end
 
-        -- map owned mesh asset -> wanted mesh asset (by index)
-        local replaceMap = {}
-        for i, fid in ipairs(fromIds) do
-            local tid = toIds[((i - 1) % #toIds) + 1]
-            replaceMap[tostring(fid)] = tostring(tid)
-            replaceMap[assetUri(fid)] = assetUri(tid)
-        end
-        -- also if Primary is 0, still push first toId onto any SpecialMesh under live charm
-
         local patched = 0
-        local function patchInstance(inst)
-            for _, d in ipairs(inst:GetDescendants()) do
-                if d:IsA("MeshPart") then
-                    local mid = d.MeshId
-                    local num = mid and mid:match("%d+")
-                    if num and replaceMap[num] then
-                        pcall(function()
-                            d.MeshId = assetUri(replaceMap[num])
-                            patched = patched + 1
-                        end)
-                    elseif num and replaceMap[mid] then
-                        pcall(function()
-                            d.MeshId = replaceMap[mid]
-                            patched = patched + 1
-                        end)
-                    elseif #fromIds == 0 and #toIds > 0 then
-                        -- owned Primary 0: force first want mesh onto first meshpart
-                        pcall(function()
-                            d.MeshId = assetUri(toIds[1])
-                            patched = patched + 1
-                        end)
+        local cloned = 0
+
+        -- path A: MeshId remap when we have want mesh asset ids
+        if #toIds > 0 then
+            local replaceMap = {}
+            if #fromIds > 0 then
+                for i, fid in ipairs(fromIds) do
+                    local tid = toIds[((i - 1) % #toIds) + 1]
+                    replaceMap[fid] = tid
+                end
+            end
+            local function patchInstance(inst)
+                if not inst then return end
+                local meshParts = {}
+                for _, d in ipairs(inst:GetDescendants()) do
+                    if d:IsA("MeshPart") or d:IsA("SpecialMesh") then
+                        meshParts[#meshParts + 1] = d
                     end
-                elseif d:IsA("SpecialMesh") then
-                    local mid = d.MeshId
-                    local num = mid and mid:match("%d+")
+                end
+                for i, d in ipairs(meshParts) do
+                    local mid = d.MeshId or ""
+                    local num = mid:match("%d+")
+                    local newId = nil
                     if num and replaceMap[num] then
+                        newId = replaceMap[num]
+                    elseif #fromIds == 0 then
+                        newId = toIds[((i - 1) % #toIds) + 1]
+                    end
+                    if newId then
                         pcall(function()
-                            d.MeshId = assetUri(replaceMap[num])
-                            patched = patched + 1
-                        end)
-                    elseif #fromIds == 0 and toIds[1] then
-                        pcall(function()
-                            d.MeshId = assetUri(toIds[1])
+                            d.MeshId = assetUri(newId)
                             patched = patched + 1
                         end)
                     end
                 end
             end
+            local char = LocalPlayer.Character
+            if char then
+                for _, d in ipairs(char:GetDescendants()) do
+                    if d.Name == ownedCharm or d.Name == "Charm" or d.Name == "CharmAttachment" then
+                        patchInstance(d)
+                    end
+                end
+                for _, t in ipairs(char:GetChildren()) do
+                    if t:IsA("Tool") then patchInstance(t) end
+                end
+            end
+            pcall(function()
+                if workspace.CurrentCamera then patchInstance(workspace.CurrentCamera) end
+            end)
         end
 
-        local char = LocalPlayer.Character
-        if char then
-            for _, d in ipairs(char:GetDescendants()) do
-                if d.Name == ownedCharm or d.Name == "Charm" or d.Name == "CharmAttachment" then
-                    patchInstance(d)
-                end
-            end
-            for _, t in ipairs(char:GetChildren()) do
-                if t:IsA("Tool") then
-                    patchInstance(t)
-                end
-            end
-        end
-        pcall(function()
-            local cam = workspace.CurrentCamera
-            if cam then patchInstance(cam) end
-        end)
-        -- also Assets.Charms live clone under player if mirrored
+        -- path B: always try Assets.Charms model clone overlay (works even when Extra empty)
         pcall(function()
             local ps = LocalPlayer:FindFirstChild("PlayerScripts")
-            local folder = ps and ps.Assets and ps.Assets:FindFirstChild("Charms")
-            local live = folder and folder:FindFirstChild(ownedCharm)
-            if live then patchInstance(live) end
+            local folder = ps and ps:FindFirstChild("Assets") and ps.Assets:FindFirstChild("Charms")
+            if not folder then return end
+            local wantM = folder:FindFirstChild(wantCharm)
+            if not wantM then return end
+            local function attachOverlay(parent)
+                if not parent then return end
+                for _, c in ipairs(parent:GetChildren()) do
+                    if c.Name == "FW_CharmOverlay" then c:Destroy() end
+                end
+                -- hide existing visible mesh under parent (owned look)
+                for _, d in ipairs(parent:GetDescendants()) do
+                    if d:IsA("BasePart") then
+                        pcall(function() d.Transparency = 1 end)
+                    end
+                    if d:IsA("Decal") or d:IsA("Texture") then
+                        pcall(function() d.Transparency = 1 end)
+                    end
+                end
+                local cl = wantM:Clone()
+                cl.Name = "FW_CharmOverlay"
+                cl.Parent = parent
+                local root = parent:IsA("BasePart") and parent or parent:FindFirstChildWhichIsA("BasePart", true)
+                if root then
+                    for _, d in ipairs(cl:GetDescendants()) do
+                        if d:IsA("BasePart") then
+                            pcall(function()
+                                d.Anchored = false
+                                d.CanCollide = false
+                                d.Massless = true
+                                d.Transparency = 0
+                                local w = Instance.new("WeldConstraint")
+                                w.Part0 = root
+                                w.Part1 = d
+                                w.Parent = d
+                                d.CFrame = root.CFrame
+                            end)
+                        end
+                    end
+                end
+                cloned = cloned + 1
+            end
+            local char = LocalPlayer.Character
+            if char then
+                for _, d in ipairs(char:GetDescendants()) do
+                    if d.Name == ownedCharm then attachOverlay(d) end
+                end
+                for _, t in ipairs(char:GetChildren()) do
+                    if t:IsA("Tool") then
+                        local ch = t:FindFirstChild(ownedCharm, true)
+                        if ch then attachOverlay(ch) end
+                        for _, a in ipairs(t:GetDescendants()) do
+                            if a.Name == "Charm" or a.Name == "CharmAttachment" then
+                                attachOverlay(a)
+                            end
+                        end
+                    end
+                end
+            end
+            -- if still nothing, attach under HumanoidRootPart as last resort
+            if cloned == 0 and char then
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if hrp then attachOverlay(hrp) end
+            end
         end)
 
         local remote = getEquipCosmeticRemote()
@@ -2493,8 +2542,15 @@ do
             pcall(function() remote:FireServer("Charm", wantCharm) end)
             pcall(function() remote:FireServer({ Type = "Charm", Name = wantCharm, From = ownedCharm }) end)
         end
-        Notify(string.format("charm %s → %s  meshes:%d", ownedCharm, wantCharm, patched),
-            patched > 0 and Color3.fromRGB(90, 200, 140) or Color3.fromRGB(230, 180, 100))
+
+        local msg
+        if patched > 0 or cloned > 0 then
+            msg = string.format("charm %s → %s  ids:%d overlay:%d", ownedCharm, wantCharm, patched, cloned)
+            Notify(msg, Color3.fromRGB(90, 200, 140))
+        else
+            msg = string.format("charm %s → %s  no live mesh (equip weapon/charm in-game, retry)", ownedCharm, wantCharm)
+            Notify(msg, Color3.fromRGB(230, 180, 100))
+        end
     end
 
     local applyCharmBtn = new("TextButton", {
